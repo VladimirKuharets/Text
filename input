@@ -1,1 +1,489 @@
+User:
+User: Перепиши код файла rel.py что бы сообщение отправленное через html файл приходило в файл rel.py в виде текста и присваивалось переменной user_text.
+
+HTML:
+<!DOCTYPE html>
+<html>
+<head>
+   <meta charset="UTF-8">
+   <title>OpenAI</title>
+   <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/0.21.1/axios.min.js"></script>
+   <script src="https://cdn.jsdelivr.net/npm/@openai/api@0.6.1"></script>
+</head>
+<body>
+
+<!-- Кнопка для вызова метода -->
+<button onclick="execute_openai_model()">Запустить</button>
+
+<!-- Текстовые поля для ввода ссылок на файлы на Google Drive -->
+<div>
+   <label for="input-file-link">Ссылка на файл с исходным текстом:</label>
+   <input type="text" id="input-file-link" placeholder="Введите ссылку на файл">
+</div>
+<div>
+   <label for="output-file-link">Ссылка на файл для записи результата:</label>
+   <input type="text" id="output-file-link" placeholder="Введите ссылку на файл">
+</div>
+
+<!-- Поле для отображения результата -->
+<div>
+   <label for="output-field">Результат:</label>
+   <textarea id="output-field" rows="10" cols="50"></textarea>
+</div>
+
+<script>
+
+// Ключ API и идентификатор клиента для Google Drive API
+const creds = '';
+const CLIENT_ID = '';
+const API_KEY = '';
+const DISCOVERY_DOCS = ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"];
+const SCOPES = "https://www.googleapis.com/auth/drive";
+
+// Ссылки на файлы на Google Drive
+let input_file_link = '';
+let output_file_link = '';
+let input_file_id = '';
+let output_file_id = '';
+
+// Инициализация клиента Google Drive API
+function initClient() {
+   gapi.client.init({
+       apiKey: API_KEY,
+       clientId: CLIENT_ID,
+       discoveryDocs: DISCOVERY_DOCS,
+       scope: SCOPES
+   }).then(() => {
+       gapi.auth2.getAuthInstance().isSignedIn.listen(updateSigninStatus);
+       updateSigninStatus(gapi.auth2.getAuthInstance().isSignedIn.get());
+   }, (error) => {
+       console.log(JSON.stringify(error, null, 2));
+   });
+}
+
+// Обновление статуса авторизации
+function updateSigninStatus(isSignedIn) {
+   if (isSignedIn) {
+       drive_service = gapi.client.drive;
+   } else {
+       gapi.auth2.getAuthInstance().signIn();
+   }
+}
+
+// Авторизация приложения в Google Drive API
+function handleClientLoad() {
+   gapi.load('client:auth2', initClient);
+}
+
+// Чтение текста из файла на Google Drive
+async function read_file(file_id) {
+   const res = await drive_service.files.get({
+       fileId: file_id,
+       alt: 'media'
+   });
+   return res.body;
+}
+
+// Запись текста в файл на Google Drive
+async function write_file(file_id, content) {
+   const res = await drive_service.files.update({
+       fileId: file_id,
+       media: {
+           mimeType: 'text/plain',
+           body: content
+       }
+   });
+   return res.body;
+}
+
+// Добавление нового текста к текущему содержимому файла output
+async function append_output_file(user_text) {
+   let output_file = await read_file(output_file_id);
+   let new_output_file_content = output_file + user_text + '\n';
+   await write_file(output_file_id, new_output_file_content);
+}
+
+// Очистка output файла
+async function clear_output_file() {
+   await write_file(output_file_id, '');
+}
+
+// Обработка текста с помощью OpenAI API
+async function process_text(input_file_content) {
+   // Задание строки, которая будет передана в OpenAI API
+   let my_text = input_file_content + '\n' + output_file_link + '\n';
+
+   while (true) {
+       // Если текст не заканчивается '!!', запрашиваем дополнительный ввод
+       if (!my_text.endsWith('!!\n')) {
+           await append_output_file(my_text.slice(0, -1));
+           await new Promise(r => setTimeout(r, 10000));
+           let user_text = document.getElementById("user-text-field").value;
+           my_text += user_text + '\n';
+       } else {
+           // Обработка текста с помощью OpenAI API
+           const response = await openai_completions.create({
+               engine: "davinci",
+               prompt: `${my_text}. Закончи сообщение на !!`,
+               maxTokens: 100
+           });
+
+           let content = response.choices[0].text;
+           let output_file = await read_file(output_file_id);
+           let new_output_file_content = output_file + content;
+           await write_file(output_file_id, new_output_file_content);
+
+           // Если текст не заканчивается '!!', добавляем его в конец input_file_content и повторяем обработку
+           if (!content.endsWith('!!\n')) {
+               await append_output_file(content.slice(0, -1));
+               await new Promise(r => setTimeout(r, 10000));
+               let user_text = document.getElementById("user-text-field").value;
+               my_text = input_file_content + '\n' + output_file_link + '\n' + user_text + '\n';
+           } else {
+               break;
+           }
+       }
+   }
+}
+
+// Выполнение обработки текста
+async function execute_openai_model() {
+   // Чтение текста из файла на Google Drive
+   let input_file_content = await read_file(input_file_id);
+
+   // Очистка output файла
+   await clear_output_file();
+
+   // Обработка текста с помощью OpenAI API
+   await process_text(input_file_content);
+
+   // Получение содержимого файла output с Google Drive
+   let output_file_content = await read_file(output_file_id);
+
+   // Вывод результата
+   document.getElementById("output-field").value = output_file_content;
+}
+
+// Обработка ввода ссылок на файлы на Google Drive
+document.getElementById("input-file-link").addEventListener("change", () => {
+   input_file_link = document.getElementById("input-file-link").value;
+   input_file_id = input_file_link.split("/").slice(-2, -1)[0];
+});
+
+document.getElementById("output-file-link").addEventListener("change", () => {
+   output_file_link = document.getElementById("output-file-link").value;
+   output_file_id = output_file_link.split("/").slice(-2, -1)[0];
+});
+
+</script>
+
+<!-- Поле для ввода дополнительного текста -->
+<div>
+   <label for="user-text-field">Дополнительный текст:</label>
+   <input type="text" id="user-text-field" placeholder="Введите текст">
+</div>
+
+</body>
+</html>
+
+rel.py
+
+import openai
+import io
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+
+openai.api_key = "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"
+
+# Ключ API идентификатор клиента для Google Drive API
+creds = Credentials.from_service_account_file('key.json')
+
+# ссылка на файл с исходным текстом на Google Drive
+input_file_link = 'https://docs.google.com/document/d/1NrvL-WJQmywA2YPCisB1HE64cJshdXfPJJX0fKUGnXM/edit?usp=sharing'
+
+# ссылка на файл для записи результата на Google Drive
+output_file_link = 'https://docs.google.com/document/d/1p8UD8bTWiaPW4o2dDKUcqqobykY2M8B3qxRu5upaVSU/edit?usp=sharing'
+
+# ID файлов на Google Drive
+input_file_id = input_file_link.split('/')[-2]
+output_file_id = output_file_link.split('/')[-2]
+
+# Создание экземпляра клиента Google Drive API
+drive_service = build('drive', 'v3', credentials=creds)
+
+
+#Очищаем файл output
+clean_file = ""
+media = MediaIoBaseUpload(io.BytesIO(clean_file.encode('utf-8')), mimetype='text/plain')
+drive_service.files().update(fileId=output_file_id, media_body=media).execute()
+
+# Чтение текста из файла на Google Drive
+output_file_request = drive_service.files().get(fileId=output_file_id, fields='*')
+output_file = output_file_request.execute()
+output_file_data = drive_service.files().export(fileId=output_file_id, mimeType='text/plain').execute()
+output_file_content = output_file_data.decode('utf-8')
+
+input_file_request = drive_service.files().get(fileId=input_file_id, fields='*')
+input_file = input_file_request.execute()
+input_file_data = drive_service.files().export(fileId=input_file_id, mimeType='text/plain').execute()
+input_file_content = input_file_data.decode('utf-8')
+
+while True:
+   my_text = input_file_link + output_file_link
+   if not output_file_content.endswith('!!'):
+       my_text = output_file_content[:-2] + input_file_content
+
+   # Обработка текста с помощью OpenAI API
+   messages = f"{my_text}"
+   max_tokens = 100
+
+   response = openai.ChatCompletion.create(
+   model="gpt-3.5-turbo",
+   messages=[{"role": "user", "content": f"{messages}. Закончи сообщение на !!"}]
+   )
+
+   content = response["choices"][0]["message"]["content"]
+   print(content)
+
+   # Запись результата в файл на Google Drive
+   output_file_request = drive_service.files().get(fileId=output_file_id, fields='*')
+   output_file = output_file_request.execute()
+   output_file_data = drive_service.files().export(fileId=output_file_id, mimeType='text/plain').execute()
+   output_file_content = output_file_data.decode('utf-8')
+
+   # Добавление новой информации к текущему содержимому файла
+   new_output_file_content = output_file_content + content
+
+   # Запись результата в файл на Google Drive
+   media = MediaIoBaseUpload(io.BytesIO(new_output_file_content.encode('utf-8')), mimetype='text/plain')
+   drive_service.files().update(fileId=output_file_id, media_body=media).execute()
+
+   # Если текст не заканчивается '!!', добавляем его в конец input_file_content и повторяем обработку
+   if not content.endswith('!!'):
+       input_file_content += content
+       print(input_file_content)
+       continue
+   else:
+       break
+
+
+Chat:
+
+
+
+
+HTML:
+
+<!DOCTYPE html>
+<html>
+<head>
+   <meta charset="UTF-8">
+   <title>OpenAI</title>
+   <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/0.21.1/axios.min.js"></script>
+   <script src="https://cdn.jsdelivr.net/npm/@openai/api@0.6.1"></script>
+</head>
+<body>
+
+<!-- Кнопка для вызова метода -->
+<button onclick="execute_openai_model()">Запустить</button>
+
+<!-- Текстовые поля для ввода ссылок на файлы на Google Drive -->
+<div>
+   <label for="input-file-link">Ссылка на файл с исходным текстом:</label>
+   <input type="text" id="input-file-link" placeholder="Введите ссылку на файл">
+</div>
+<div>
+   <label for="output-file-link">Ссылка на файл для записи результата:</label>
+   <input type="text" id="output-file-link" placeholder="Введите ссылку на файл">
+</div>
+
+<!-- Поле для отображения результата -->
+<div>
+   <label for="output-field">Результат:</label>
+   <textarea id="output-field" rows="10" cols="50"></textarea>
+</div>
+
+<script>
+
+// Ключ API и идентификатор клиента для Google Drive API
+const creds = '';
+const CLIENT_ID = '';
+const API_KEY = '';
+const DISCOVERY_DOCS = ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"];
+const SCOPES = "https://www.googleapis.com/auth/drive";
+
+// Ссылки на файлы на Google Drive
+let input_file_link = '';
+let output_file_link = '';
+let input_file_id = '';
+let output_file_id = '';
+
+// Инициализация клиента Google Drive API
+function initClient() {
+   gapi.client.init({
+       apiKey: API_KEY,
+       clientId: CLIENT_ID,
+       discoveryDocs: DISCOVERY_DOCS,
+       scope: SCOPES
+   }).then(() => {
+       gapi.auth2.getAuthInstance().isSignedIn.listen(updateSigninStatus);
+       updateSigninStatus(gapi.auth2.getAuthInstance().isSignedIn.get());
+   }, (error) => {
+       console.log(JSON.stringify(error, null, 2));
+   });
+}
+
+// Обновление статуса авторизации
+function updateSigninStatus(isSignedIn) {
+   if (isSignedIn) {
+       drive_service = gapi.client.drive;
+   } else {
+       gapi.auth2.getAuthInstance().signIn();
+   }
+}
+
+// Авторизация приложения в Google Drive API
+function handleClientLoad() {
+   gapi.load('client:auth2', initClient);
+}
+
+// Чтение текста из файла на Google Drive
+async function read_file(file_id) {
+   const res = await drive_service.files.get({
+       fileId: file_id,
+       alt: 'media'
+   });
+   return res.body;
+}
+
+// Запись текста в файл на Google Drive
+async function write_file(file_id, content) {
+   const res = await drive_service.files.update({
+       fileId: file_id,
+       media: {
+           mimeType: 'text/plain',
+           body: content
+       }
+   });
+   return res.body;
+}
+
+// Добавление нового текста к текущему содержимому файла output
+async function append_output_file(user_text) {
+   let output_file = await read_file(output_file_id);
+   let new_output_file_content = output_file + user_text + '\n';
+   await write_file(output_file_id, new_output_file_content);
+}
+
+// Очистка output файла
+async function clear_output_file() {
+   await write_file(output_file_id, '');
+}
+
+// Обработка текста с помощью OpenAI API
+async function process_text(input_file_content) {
+   // Задание строки, которая будет передана в OpenAI API
+   let my_text = input_file_content + '\n' + output_file_link + '\n';
+
+   while (true) {
+       // Если текст не заканчивается '!!', запрашиваем дополнительный ввод
+       if (!my_text.endsWith('!!\n')) {
+           await append_output_file(my_text.slice(0, -1));
+           await new Promise(r => setTimeout(r, 10000));
+           let user_text = document.getElementById("user-text-field").value;
+           my_text += user_text + '\n';
+       } else {
+           // Обработка текста с помощью OpenAI API
+           const response = await openai_completions.create({
+               engine: "davinci",
+               prompt: `${my_text}. Закончи сообщение на !!`,
+               maxTokens: 100
+           });
+
+           let content = response.choices[0].text;
+           let output_file = await read_file(output_file_id);
+           let new_output_file_content = output_file + content;
+           await write_file(output_file_id, new_output_file_content);
+
+           // Если текст не заканчивается '!!', добавляем его в конец input_file_content и повторяем обработку
+           if (!content.endsWith('!!\n')) {
+               await append_output_file(content.slice(0, -1));
+               await new Promise(r => setTimeout(r, 10000));
+               let user_text = document.getElementById("user-text-field").value;
+               my_text = input_file_content + '\n' + output_file_link + '\n' + user_text + '\n';
+           } else {
+               break;
+           }
+       }
+   }
+}
+
+// Выполнение обработки текста
+async function execute_openai_model() {
+   // Чтение текста из файла на Google Drive
+   let input_file_content = await read_file(input_file_id);
+
+   // Очистка output файла
+   await clear_output_file();
+
+   // Обработка текста с помощью OpenAI API
+   await process_text(input_file_content);
+
+   // Получение содержимого файла output с Google Drive
+   let output_file_content = await read_file(output_file_id);
+
+   // Вывод результата
+   let user_text = output_file_content;
+   document.getElementById("output-field").value = user_text;
+  
+   // Отправка сообщения на сервер через POST-запрос
+   axios.post('/send_message', {
+       message: user_text
+   })
+   .then(response => console.log(response))
+   .catch(error => console.log(error));
+}
+
+// Обработка ввода ссылок на файлы на Google Drive
+document.getElementById("input-file-link").addEventListener("change", () => {
+   input_file_link = document.getElementById("input-file-link").value;
+   input_file_id = input_file_link.split("/").slice(-2, -1)[0];
+});
+
+document.getElementById("output-file-link").addEventListener("change", () => {
+   output_file_link = document.getElementById("output-file-link").value;
+   output_file_id = output_file_link.split("/").slice(-2, -1)[0];
+});
+
+</script>
+
+<!-- Поле для ввода дополнительного текста -->
+<div>
+   <label for="user-text-field">Дополнительный текст:</label>
+   <input type="text" id="user-text-field" placeholder="Введите текст">
+</div>
+
+</body>
+</html>
+
+rel.py
+
+import openai
+import io
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+from flask import Flask, request
+
+app = Flask(__name__)
+
+openai.api_key = "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"
+
+# Ключ API ид
+
+
+User:
+Повторно напиши содержимое файла rel.py
+
 
